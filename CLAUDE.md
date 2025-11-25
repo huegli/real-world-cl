@@ -25,3 +25,9 @@ This is a repository holding tutorials that teach Common Lisp concepts from begi
 3. Write your comments & critique on the provided solution in a file named "critique.org" in the same subdirectory. The file should be in Emacs Org file format
 
 Only provide critique for tutorial exercises that have a solution provided under @exercises <level>/<tutorial name>, do not provide a critique for tutorial exercises without a solution
+
+## Questions and Answers
+
+1. Look through the provided excercise and look for ";;; LLM-QUESTION: ...". These are questions for you (the LLM) to answer
+
+2. Provide the answer in the row below the question and prefix it with ";;; LLM-ANSWER: ..."
