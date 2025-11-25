@@ -1,0 +1,3 @@
+[submodule "programms/cl-6502"]
+	path = programms/cl-6502
+	url = https://github.com/kingcons/cl-6502
