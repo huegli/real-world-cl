@@ -1,0 +1,122 @@
+#+TITLE: Package Definition in Common Lisp
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Packages in Common Lisp provide a namespace mechanism that helps organize
+symbols and prevent naming conflicts. This tutorial demonstrates package
+definition using real-world examples from the cl-6502 project, a 6502
+CPU emulator.
+
+* Basic Package Definition
+
+The ~defpackage~ macro defines a new package. Here's a complete example
+from cl-6502:
+
+#+BEGIN_SRC lisp
+(defpackage :6502
+  (:use :cl)
+  (:import-from :alexandria #:compose #:emptyp #:flatten #:make-keyword #:named-lambda)
+  (:export ;; Public API
+           #:execute #:step-cpu #:asm #:disasm #:disasm-to-str #:disasm-to-list
+           #:current-instruction #:get-byte #:get-word #:get-range #:*cpu* #:cpu
+           #:nmi #:reset #:jit-step #:*opcode-meta*
+           ;; ...
+           ))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/packages.lisp::1][packages.lisp:1-15]]
+
+* Package Components Explained
+
+** The ~:use~ Clause
+
+The ~:use~ clause specifies which packages' external symbols should be
+inherited (made accessible without a package prefix):
+
+#+BEGIN_SRC lisp
+(:use :cl)  ; Inherit all standard Common Lisp symbols
+#+END_SRC
+
+** The ~:import-from~ Clause
+
+~:import-from~ selectively imports specific symbols from another package:
+
+#+BEGIN_SRC lisp
+(:import-from :alexandria
+  #:compose
+  #:emptyp
+  #:flatten
+  #:make-keyword
+  #:named-lambda)
+#+END_SRC
+
+This is preferred over ~:use~ when you only need a few symbols from a
+library, as it makes dependencies explicit and avoids potential conflicts.
+
+** The ~:export~ Clause
+
+~:export~ declares which symbols are part of the package's public API:
+
+#+BEGIN_SRC lisp
+(:export #:execute #:step-cpu #:asm #:disasm)
+#+END_SRC
+
+* Creating Wrapper Packages
+
+A common pattern is creating a "user-friendly" wrapper package that
+re-exports symbols from an internal implementation package:
+
+#+BEGIN_SRC lisp
+(defpackage :cl-6502
+  (:documentation "Homepage: <a href=\"...\">Github</a>")
+  (:use :cl)
+  (:import-from :6502
+    #:execute #:step-cpu #:asm #:disasm #:disasm-to-str #:disasm-to-list
+    #:current-instruction #:get-byte #:get-word #:get-range #:*cpu* #:cpu
+    #:nmi #:reset #:jit-step)
+  (:export #:execute #:step-cpu #:asm #:disasm #:disasm-to-str #:disasm-to-list
+           #:current-instruction #:get-byte #:get-word #:get-range #:*cpu* #:cpu
+           #:nmi #:reset #:jit-step))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/packages.lisp::17][packages.lisp:17-25]]
+
+* Using ~in-package~
+
+After defining a package, use ~in-package~ to switch the current package
+context for subsequent code:
+
+#+BEGIN_SRC lisp
+(in-package :6502)
+
+(defun execute (cpu)
+  "Step the CPU until a BRK instruction."
+  ;; ...
+  )
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/utils.lisp::1][utils.lisp:1]]
+
+* Best Practices
+
+1. *Use the ~#:~ prefix* for symbol names in package forms - this creates
+   uninterned symbols and avoids polluting the current package.
+
+2. *Be explicit about imports* - prefer ~:import-from~ over ~:use~ for
+   external libraries to make dependencies clear.
+
+3. *Document exported symbols* - group exports by category with comments.
+
+4. *One package per file or system* - keep package definitions in a
+   dedicated file, typically named ~packages.lisp~ or ~package.lisp~.
+
+* Exercise
+
+Create a package named ~:my-calculator~ that:
+- Uses the ~:cl~ package
+- Imports ~floor~ and ~ceiling~ from ~:cl~ explicitly (for practice)
+- Exports ~add~, ~subtract~, ~multiply~, and ~divide~
+
+Then write a simple implementation using ~in-package~.

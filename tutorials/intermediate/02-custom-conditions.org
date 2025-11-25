@@ -1,0 +1,227 @@
+#+TITLE: Custom Conditions and Error Handling
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Common Lisp's condition system is more powerful than exception systems
+in most languages. It separates the concepts of signaling a condition,
+handling it, and recovering from it. This tutorial covers defining
+custom conditions.
+
+* Defining Custom Conditions
+
+The cl-6502 project defines several custom conditions for error handling:
+
+#+BEGIN_SRC lisp
+(define-condition illegal-opcode ()
+  ((opcode :initarg :opcode :reader opcode))
+  (:report (lambda (condition stream)
+             (format stream "~X is not a legal opcode." (opcode condition))))
+  (:documentation "Illegal opcodes are not currently implemented."))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/conditions.lisp::3][conditions.lisp:3-7]]
+
+* Anatomy of DEFINE-CONDITION
+
+#+BEGIN_SRC lisp
+(define-condition condition-name (parent-conditions)
+  ((slot-name :initarg :keyword
+              :reader reader-name
+              :accessor accessor-name
+              :initform default-value))
+  (:report report-function-or-string)
+  (:documentation "Description"))
+#+END_SRC
+
+** Components:
+
+1. *condition-name*: The name of your condition type
+2. *parent-conditions*: List of parent condition types to inherit from
+3. *slots*: Data carried by the condition (like class slots)
+4. *:report*: How to display the condition when printed
+5. *:documentation*: Description of the condition
+
+* More Examples from cl-6502
+
+** Invalid Syntax Condition
+
+#+BEGIN_SRC lisp
+(define-condition invalid-syntax ()
+  ((line :initarg :line :reader line))
+  (:report (lambda (condition stream)
+             (format stream "Syntax for line ~S is invalid." (line condition))))
+  (:documentation "Assembly must conform to the syntax in the README."))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/conditions.lisp::9][conditions.lisp:9-13]]
+
+** Invalid Mode Condition
+
+#+BEGIN_SRC lisp
+(define-condition invalid-mode ()
+  ((mode :initarg :mode :reader mode))
+  (:report (lambda (condition stream)
+             (format stream "~A is not a valid addressing mode." (mode condition))))
+  (:documentation "Only the 6502 addressing modes have readers and printers."))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/conditions.lisp::15][conditions.lisp:15-19]]
+
+* Signaling Conditions
+
+Use ~error~ to signal an error condition:
+
+#+BEGIN_SRC lisp
+(defun execute (cpu)
+  "Step the CPU until a BRK instruction."
+  (loop for opcode of-type u8 = (get-byte (cpu-pc cpu))
+     do (handler-case (step-cpu cpu opcode)
+          (undefined-function ()
+            (error 'illegal-opcode :opcode opcode)))
+     until (zerop opcode)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/utils.lisp::3][utils.lisp:3-9]]
+
+The ~error~ function takes:
+- A condition type (symbol)
+- Initargs to construct the condition
+
+* Handling Conditions
+
+** HANDLER-CASE
+
+~handler-case~ handles conditions by type, similar to try/catch:
+
+#+BEGIN_SRC lisp
+(handler-case (step-cpu cpu opcode)
+  (undefined-function ()
+    (error 'illegal-opcode :opcode opcode)))
+#+END_SRC
+
+If ~step-cpu~ signals an ~undefined-function~ condition, the handler
+re-signals it as an ~illegal-opcode~.
+
+** HANDLER-BIND
+
+~handler-bind~ is more powerful - it can decide how to handle the
+condition without unwinding the stack:
+
+#+BEGIN_SRC lisp
+(handler-bind ((illegal-opcode
+                 (lambda (c)
+                   (format t "Warning: ~A~%" c)
+                   (invoke-restart 'skip-opcode))))
+  (execute cpu))
+#+END_SRC
+
+* The Condition Hierarchy
+
+Common Lisp has a built-in condition hierarchy:
+
+#+BEGIN_SRC
+condition
+  serious-condition
+    error
+      simple-error
+      type-error
+      ...
+    storage-condition
+  warning
+    simple-warning
+    style-warning
+  simple-condition
+#+END_SRC
+
+When defining custom conditions, choose an appropriate parent:
+
+#+BEGIN_SRC lisp
+;; For errors that should stop execution
+(define-condition my-error (error)
+  ...)
+
+;; For warnings that can be ignored
+(define-condition my-warning (warning)
+  ...)
+#+END_SRC
+
+* Best Practice: Specific Condition Types
+
+Instead of using generic errors with strings:
+
+#+BEGIN_SRC lisp
+;; Avoid this:
+(error "Invalid opcode: ~X" opcode)
+#+END_SRC
+
+Define specific condition types:
+
+#+BEGIN_SRC lisp
+;; Prefer this:
+(define-condition illegal-opcode (error)
+  ((opcode :initarg :opcode :reader opcode))
+  (:report ...))
+
+(error 'illegal-opcode :opcode opcode)
+#+END_SRC
+
+Benefits:
+- Conditions can be caught by type
+- Data is accessible via readers
+- Better debugging and logging
+- Self-documenting code
+
+* Report Functions
+
+The ~:report~ option can be:
+
+** A Lambda
+
+#+BEGIN_SRC lisp
+(:report (lambda (condition stream)
+           (format stream "Error: ~A" (slot condition))))
+#+END_SRC
+
+** A Format String (for simple cases)
+
+#+BEGIN_SRC lisp
+(:report "An error occurred")
+#+END_SRC
+
+** A Function Name
+
+#+BEGIN_SRC lisp
+(:report my-report-function)
+#+END_SRC
+
+* Restart System (Preview)
+
+The condition system supports restarts - predefined recovery options:
+
+#+BEGIN_SRC lisp
+(define-condition recoverable-error (error)
+  ((value :initarg :value :reader value)))
+
+(defun safe-divide (x y)
+  (restart-case
+      (if (zerop y)
+          (error 'recoverable-error :value x)
+          (/ x y))
+    (return-zero ()
+      :report "Return 0 instead"
+      0)
+    (use-value (new-divisor)
+      :report "Supply a different divisor"
+      (/ x new-divisor))))
+
+;; Users can invoke restarts when handling the error
+#+END_SRC
+
+* Exercise
+
+1. Define a ~file-not-found~ condition with a ~pathname~ slot
+2. Define a ~parse-error~ condition with ~line-number~ and ~message~ slots
+3. Write a function that signals these conditions and another that handles them
+4. Practice with ~handler-case~ to catch and report errors gracefully

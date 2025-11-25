@@ -1,0 +1,231 @@
+#+TITLE: EVAL-WHEN for Compile-Time Execution
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+~eval-when~ controls when code is evaluated: at compile time, load time,
+or execution time. This is crucial for macros that depend on functions
+or data defined elsewhere in the same file.
+
+* The Three Situations
+
+| Situation            | When                                    |
+|----------------------+-----------------------------------------|
+| ~:compile-toplevel~  | When compiling the file                 |
+| ~:load-toplevel~     | When loading the compiled file          |
+| ~:execute~           | When the form is executed directly      |
+
+* Problem: Macros Using Runtime Functions
+
+Consider this pattern from cl-6502:
+
+#+BEGIN_SRC lisp
+;; This macro uses %STATUS-BIT
+(defmacro status-bit (key)
+  "Test if KEY is set in the status register."
+  `(logand (cpu-sr cpu) ,(ash 1 (%status-bit key))))
+
+;; %STATUS-BIT is created by this
+(defenum status-bit (:carry :zero :interrupt :decimal
+                     :break :unused :overflow :negative))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::133][cpu.lisp:133-135]]
+
+**Problem**: When compiling ~(status-bit :carry)~, the compiler needs
+~%status-bit~ to exist, but it might not be defined yet!
+
+* Solution: EVAL-WHEN
+
+#+BEGIN_SRC lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defenum status-bit (:carry :zero :interrupt :decimal
+                       :break :unused :overflow :negative)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::129][cpu.lisp:129-131]]
+
+This ensures ~defenum~ runs:
+- During compilation (so macros can use it)
+- When loading (so runtime can use it)
+- In the REPL (so interactive use works)
+
+* How DEFENUM Works
+
+#+BEGIN_SRC lisp
+(defmacro defenum (name (&rest keys))
+  (let ((enum (make-hash-table)))
+    (loop for i = 0 then (1+ i)
+       for key in keys
+       do (setf (gethash key enum) i))
+    `(defun ,(intern (format nil "%~:@(~A~)" name)) (key)
+       (let ((enum ,enum))
+         (gethash key enum)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::118][cpu.lisp:118-127]]
+
+The hash table is built at macro-expansion time and embedded in the
+generated code. Without ~eval-when~, this only happens at load time.
+
+* Macro Using the Enum
+
+#+BEGIN_SRC lisp
+(defmacro status-bit (key)
+  "Test if KEY is set in the status register. KEY should be a keyword."
+  `(logand (cpu-sr cpu) ,(ash 1 (%status-bit key))))
+
+(defmacro set-status-bit (key new-val)
+  "Set bit KEY in the status reg to NEW-VAL. KEY should be a keyword."
+  `(setf (ldb (byte 1 ,(%status-bit key)) (cpu-sr cpu)) ,new-val))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::133][cpu.lisp:133-139]]
+
+The ~,(%status-bit key)~ is evaluated at macro expansion time. The
+comma unquotes, calling ~%status-bit~ during expansion, not at runtime.
+
+* The Compilation Model
+
+#+BEGIN_SRC
+File Compilation Process:
+
+1. Read forms
+2. For each top-level form:
+   - If (eval-when (:compile-toplevel) ...), evaluate now
+   - Compile the form
+   - If (eval-when (:load-toplevel) ...), include in output
+3. Write compiled output (FASL file)
+
+Loading Process:
+
+1. For each form in FASL:
+   - If marked for load-time, evaluate
+   - Otherwise, just load the compiled code
+#+END_SRC
+
+* Common Patterns
+
+** Pattern 1: Helper Functions for Macros
+
+#+BEGIN_SRC lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun compute-magic-number (x)
+    "Helper used by MY-MACRO at expansion time."
+    (* x x x)))
+
+(defmacro my-macro (n)
+  `(+ ,(compute-magic-number n) 100))
+#+END_SRC
+
+** Pattern 2: Compile-Time Constants
+
+#+BEGIN_SRC lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defconstant +table-size+ (expt 2 16)))
+
+(defmacro make-lookup-table ()
+  `(make-array ,+table-size+))
+#+END_SRC
+
+** Pattern 3: Protocol/Interface Definitions
+
+#+BEGIN_SRC lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defgeneric process (item)
+    (:documentation "Process an item.")))
+
+(defmacro def-processor (type &body body)
+  `(defmethod process ((item ,type))
+     ,@body))
+#+END_SRC
+
+* What Each Situation Means
+
+** :compile-toplevel Only
+
+#+BEGIN_SRC lisp
+(eval-when (:compile-toplevel)
+  (format t "Compiling...~%"))  ; Only prints during compilation
+#+END_SRC
+
+** :load-toplevel Only
+
+#+BEGIN_SRC lisp
+(eval-when (:load-toplevel)
+  (format t "Loading...~%"))  ; Only prints when loading
+#+END_SRC
+
+** :execute Only
+
+#+BEGIN_SRC lisp
+(eval-when (:execute)
+  (format t "Executing...~%"))  ; Only in REPL or explicit EVAL
+#+END_SRC
+
+** All Three (Most Common)
+
+#+BEGIN_SRC lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  ...)  ; Always available
+#+END_SRC
+
+* Common Mistakes
+
+** Mistake 1: Missing :execute
+
+#+BEGIN_SRC lisp
+;; Won't work in REPL!
+(eval-when (:compile-toplevel :load-toplevel)
+  (defun helper () ...))
+#+END_SRC
+
+** Mistake 2: Forgetting eval-when Entirely
+
+#+BEGIN_SRC lisp
+;; Compiling this file will fail if my-macro uses helper
+(defun helper () ...)
+
+(defmacro my-macro ()
+  `(+ ,(helper) 1))
+
+(my-macro)  ; Error: HELPER undefined during compilation
+#+END_SRC
+
+** Mistake 3: Nested eval-when
+
+#+BEGIN_SRC lisp
+;; The inner eval-when is relative to the outer one
+;; This can be confusing - avoid nesting when possible
+(eval-when (:compile-toplevel)
+  (eval-when (:execute)  ; This is :execute within :compile-toplevel
+    ...))
+#+END_SRC
+
+* When You Need EVAL-WHEN
+
+1. Defining functions used by macros in the same file
+2. Setting up compile-time data structures
+3. Defining constants used in macro expansions
+4. Loading dependencies needed during compilation
+5. Any code that macros call during expansion
+
+* Best Practices
+
+1. *Use all three situations* unless you have a specific reason not to
+2. *Group related eval-when forms* at the top of files
+3. *Document why* eval-when is needed (it's not obvious)
+4. *Test compilation separately* from loading (~compile-file~)
+5. *Avoid side effects* in compile-time code when possible
+
+* Exercise
+
+1. Create a macro that uses a helper function, and make sure it
+   compiles correctly with proper ~eval-when~
+
+2. Build a compile-time lookup table that a macro uses to transform
+   keywords into integers
+
+3. Trace through what happens when a file with ~eval-when~ is compiled
+   vs. loaded vs. evaluated in the REPL

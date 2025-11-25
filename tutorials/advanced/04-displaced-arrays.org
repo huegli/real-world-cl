@@ -1,0 +1,235 @@
+#+TITLE: Displaced Arrays for Stream Processing
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Displaced arrays are a powerful Common Lisp feature that lets you
+create array "views" into existing arrays without copying data.
+The cl-6502 parser uses displaced arrays to implement an efficient
+string stream for parsing assembly code.
+
+* What is a Displaced Array?
+
+A displaced array shares storage with another array:
+
+#+BEGIN_SRC lisp
+(let* ((original #(1 2 3 4 5))
+       (displaced (make-array 3 :displaced-to original
+                                :displaced-index-offset 1)))
+  (list original displaced))
+;; => (#(1 2 3 4 5) #(2 3 4))
+
+;; Modifying the displaced array modifies the original:
+(setf (aref displaced 0) 99)
+original
+;; => #(1 99 3 4 5)
+#+END_SRC
+
+* The Parser's String Stream
+
+The cl-6502 parser creates a mutable view into the source text:
+
+#+BEGIN_SRC lisp
+(defun make-stream (text)
+  "Make a string displaced onto the given text."
+  (make-array (length text) :element-type 'character :adjustable t
+              :displaced-to text :displaced-index-offset 0))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/parser.lisp::3][parser.lisp:3-6]]
+
+Key points:
+- ~:displaced-to text~ - shares storage with ~text~
+- ~:displaced-index-offset 0~ - starts at beginning
+- ~:adjustable t~ - can be resized (narrowed) later
+
+* Advancing the Stream
+
+Instead of maintaining an index variable, the stream is narrowed:
+
+#+BEGIN_SRC lisp
+(defun try-fetch (stream regex)
+  "If the stream begins with a regex match, returns the matched text and move
+   the stream past it. Otherwise, returns nil."
+  (let ((result (cl-ppcre:scan-to-strings regex stream)))
+    (when result
+      (multiple-value-bind (original index-offset) (array-displacement stream)
+        (adjust-array stream (- (length stream) (length result))
+                      :displaced-to original
+                      :displaced-index-offset (+ index-offset (length result))))
+      result)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/parser.lisp::8][parser.lisp:8-17]]
+
+This pattern:
+1. Try to match regex at start of stream
+2. If matched, get the underlying array info
+3. Adjust the stream to skip past the match
+4. Return the matched text
+
+* Accessing Displacement Info
+
+~array-displacement~ returns the underlying array and offset:
+
+#+BEGIN_SRC lisp
+(let* ((text "hello world")
+       (stream (make-stream text)))
+  (multiple-value-bind (original offset) (array-displacement stream)
+    (format nil "Original: ~S, Offset: ~D" original offset)))
+;; => "Original: \"hello world\", Offset: 0"
+#+END_SRC
+
+* Substream Navigation
+
+For more complex positioning:
+
+#+BEGIN_SRC lisp
+(defun substream-advance (stream start end)
+  "Set the stream to a substream at START positions ahead and finishing
+   at END position."
+  (multiple-value-bind (original index-offset) (array-displacement stream)
+    (unless original
+      (error "substream-advance called with a string, not a stream"))
+    (adjust-array stream (- end start) :displaced-to original
+                  :displaced-index-offset (+ index-offset start))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/parser.lisp::19][parser.lisp:19-26]]
+
+* Practical Usage in Parser
+
+#+BEGIN_SRC lisp
+(defun parse-line (text)
+  "Converts a line of text into an instruction."
+  (let* ((stream (make-stream text))
+         (label (fetch-label (skip-white-space stream)))
+         (opcode (fetch-opcode (skip-white-space stream)))
+         (operand (fetch-operand (skip-white-space stream)))
+         ;; ...
+         )
+    (make-instruction :label label :opcode opcode ...)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/parser.lisp::97][parser.lisp:97-106]]
+
+Each ~fetch-*~ function:
+1. Examines the current stream position
+2. Extracts a token if found
+3. Advances the stream past the token
+4. Returns the extracted value
+
+** Whitespace Handling
+
+#+BEGIN_SRC lisp
+(defun skip-white-space (stream)
+  "Fetches white space from the stream, ignores it and returns the stream."
+  (try-fetch stream "^\\s+")
+  stream)
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/parser.lisp::28][parser.lisp:28-31]]
+
+** Token Extraction
+
+#+BEGIN_SRC lisp
+(defun fetch-label (stream)
+  "Fetches a label from the stream, or returns nil."
+  (let ((result (try-fetch stream "^[a-zA-Z][a-zA-Z0-9_]*:")))
+    (when result (string-right-trim ":" result))))
+
+(defun fetch-opcode (stream)
+  "Fetches an opcode from the stream as a keyword, or returns nil."
+  (let ((result (try-fetch stream "^[a-zA-Z]{3}")))
+    (when result (intern (string-upcase result) :keyword))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/parser.lisp::33][parser.lisp:33-41]]
+
+* Benefits of This Pattern
+
+** No Index Bookkeeping
+
+Instead of:
+#+BEGIN_SRC lisp
+;; Traditional approach
+(defun parse (text)
+  (let ((pos 0))
+    (setf pos (skip-whitespace text pos))
+    (multiple-value-bind (token new-pos) (read-token text pos)
+      (setf pos new-pos)
+      ...)))
+#+END_SRC
+
+You have:
+#+BEGIN_SRC lisp
+;; Displaced array approach
+(defun parse (text)
+  (let ((stream (make-stream text)))
+    (skip-white-space stream)  ; Mutates stream
+    (let ((token (read-token stream)))  ; Mutates stream
+      ...)))
+#+END_SRC
+
+** Natural Regex Integration
+
+CL-PPCRE works directly on the stream as if it were a string,
+always matching from the "beginning" (which moves).
+
+** Zero-Copy Efficiency
+
+No substring copying until you actually need the matched text.
+The ~stream~ is just a different view of the same character data.
+
+* Alternative: Traditional Index-Based Parsing
+
+#+BEGIN_SRC lisp
+(defun parse-traditional (text)
+  (let ((pos 0)
+        (len (length text)))
+    (flet ((peek () (when (< pos len) (char text pos)))
+           (advance () (incf pos))
+           (match (str)
+             (when (string= text str :start1 pos :end1 (+ pos (length str)))
+               (incf pos (length str))
+               str)))
+      ;; ... parsing logic ...
+      )))
+#+END_SRC
+
+This works but requires passing ~pos~ everywhere or using dynamic variables.
+
+* Performance Considerations
+
+** Advantages of Displaced Arrays
+
+1. No data copying for "substring" operations
+2. Clean, functional-style code
+3. Works seamlessly with existing string functions
+
+** Potential Downsides
+
+1. ~adjust-array~ may be slower than incrementing an integer
+2. Keeps the entire original string alive (no partial GC)
+3. ~array-displacement~ call has some overhead
+
+For parsing, the code clarity usually outweighs performance concerns.
+
+* Exercise
+
+1. Implement a simple tokenizer using displaced arrays that handles:
+   - Whitespace (skip)
+   - Numbers (return as integers)
+   - Identifiers (return as symbols)
+   - Operators (+, -, *, /)
+
+2. Create a "string cursor" abstraction using displaced arrays that
+   supports:
+   - ~peek~ - look at current character
+   - ~advance~ - move forward N characters
+   - ~remaining~ - get rest of string
+   - ~match-prefix~ - check and consume a prefix
+
+3. Compare performance of displaced array parsing vs. index-based
+   parsing for a simple expression grammar

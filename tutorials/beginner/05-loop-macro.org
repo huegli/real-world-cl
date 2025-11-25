@@ -1,0 +1,181 @@
+#+TITLE: The LOOP Macro
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+The ~loop~ macro is Common Lisp's most powerful iteration construct.
+While it has a distinctive English-like syntax that differs from the
+rest of Lisp, it's extremely practical for real-world code.
+
+* Basic Loop Patterns from cl-6502
+
+** Simple DO Loop
+
+#+BEGIN_SRC lisp
+(defun execute (cpu)
+  "Step the CPU until a BRK instruction."
+  (loop for opcode of-type u8 = (get-byte (cpu-pc cpu))
+     do (handler-case (step-cpu cpu opcode)
+          (undefined-function ()
+            (error 'illegal-opcode :opcode opcode)))
+     until (zerop opcode)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/utils.lisp::3][utils.lisp:3-9]]
+
+Key elements:
+- ~for var = expr~ - rebinds var each iteration
+- ~of-type~ - optional type declaration
+- ~do~ - execute forms for side effects
+- ~until~ - termination condition
+
+** COLLECT Pattern
+
+#+BEGIN_SRC lisp
+(defun disasm-to-list (start end)
+  "Disassemble a given region of memory into a sexp-based format."
+  (with-disasm (start end :op #'sexpify-instruction) collect result))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/disassemble.lisp::15][disassemble.lisp:15-17]]
+
+The ~collect~ clause accumulates results into a list.
+
+** Iterating with Index
+
+#+BEGIN_SRC lisp
+(loop for i = 0 then (1+ i)
+   for key in keys
+   do (setf (gethash key enum) i))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::122][cpu.lisp:122-124]]
+
+- ~for var = init then step~ - custom stepping
+- ~for var in list~ - iterate over list elements
+
+** WHEN Filter
+
+#+BEGIN_SRC lisp
+(defun parse-code (text)
+  "Parses the assembly source text and returns the assembled code."
+  (loop for line in (cl-ppcre:split "\\n" text)
+        when (parse-line (strip-comment line)) collect it))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/parser.lisp::114][parser.lisp:114-118]]
+
+- ~when condition~ - conditional execution
+- ~it~ - refers to the test value (the result of parse-line)
+
+** WHILE and Complex Conditions
+
+#+BEGIN_SRC lisp
+(loop with index = start while (<= index end)
+    for (step result) = (disasm-ins index)
+    do (incf index step))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/disassemble.lisp::7][disassemble.lisp:7-9]]
+
+- ~with var = val~ - bind a variable once (not re-evaluated)
+- ~while~ - continue while condition is true
+- ~for (a b) = expr~ - destructuring binding
+
+** ACROSS for Arrays
+
+#+BEGIN_SRC lisp
+(loop for e across *opcode-meta*
+   when (match-opcode-data e opcode :any) collect (fifth e))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::113][assemble.lisp:113-114]]
+
+- ~for var across array~ - iterate over array elements
+
+** Nested Loops
+
+#+BEGIN_SRC lisp
+(defun assemble-code-block (code-block &optional init-env org-start)
+  (let ((env (or init-env (make-hash-table :test 'equal)))
+        (output (make-array 0 :fill-pointer 0 :adjustable t))
+        (pc-start (or org-start 0)))
+    (loop for instruction in code-block
+       do (let ((bytes (assemble-instruction instruction
+                         (+ pc-start (length output)) env)))
+            (loop for b in bytes
+               do (vector-push-extend b output))))
+    ;; ...
+    output))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::57][assemble.lisp:57-71]]
+
+* Loop Clause Reference
+
+** Iteration Clauses
+
+| Clause                  | Description                      |
+|-------------------------+----------------------------------|
+| ~for var in list~       | Iterate over list elements       |
+| ~for var on list~       | Iterate over list tails (cdrs)   |
+| ~for var across array~  | Iterate over array elements      |
+| ~for var = expr~        | Rebind each iteration            |
+| ~for var = init then step~ | Custom initialization and step |
+| ~for var from n to m~   | Numeric iteration                |
+
+** Accumulation Clauses
+
+| Clause              | Description                        |
+|---------------------+------------------------------------|
+| ~collect expr~      | Build a list of values             |
+| ~append expr~       | Append lists together              |
+| ~nconc expr~        | Destructively append (faster)      |
+| ~count expr~        | Count non-nil results              |
+| ~sum expr~          | Sum numeric values                 |
+| ~maximize expr~     | Track maximum value                |
+| ~minimize expr~     | Track minimum value                |
+
+** Control Clauses
+
+| Clause            | Description                          |
+|-------------------+--------------------------------------|
+| ~while cond~      | Continue while true                  |
+| ~until cond~      | Stop when true                       |
+| ~when cond~       | Conditional execution                |
+| ~unless cond~     | Negative conditional                 |
+| ~do forms~        | Execute for side effects             |
+| ~return expr~     | Exit loop with value                 |
+
+** Special Variables
+
+| Variable  | Meaning                               |
+|-----------+---------------------------------------|
+| ~it~      | Result of preceding test expression   |
+
+* Destructuring in LOOP
+
+#+BEGIN_SRC lisp
+(loop for (op cycles bytes mode) in modes collect
+      `(setf (aref *opcode-meta* ,op) ',(list name docs cycles bytes mode)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::193][cpu.lisp:193-194]]
+
+The loop variable can be a destructuring pattern.
+
+* Best Practices
+
+1. Use ~loop~ for complex iterations with multiple clauses
+2. Use ~dolist~ for simple list iteration
+3. Use ~dotimes~ for simple counted loops
+4. Prefer ~collect~ over manual list building
+5. Use ~with~ for loop-local variables that don't change
+
+* Exercise
+
+Using ~loop~, write:
+1. A function that finds all even numbers in a list
+2. A function that sums the squares of numbers from 1 to n
+3. A function that creates an association list from two parallel lists

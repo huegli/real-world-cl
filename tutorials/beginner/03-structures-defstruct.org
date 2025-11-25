@@ -1,0 +1,167 @@
+#+TITLE: Structures with DEFSTRUCT
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+~defstruct~ is Common Lisp's mechanism for defining record-like data
+structures. It automatically generates constructor functions, accessor
+functions, a type predicate, and a copier function.
+
+* Basic Structure Definition
+
+The cl-6502 project defines a CPU structure to represent the 6502
+processor state:
+
+#+BEGIN_SRC lisp
+(defstruct cpu
+  "A 6502 CPU with an extra slot for tracking the cycle count/clock ticks."
+  (pc #xfffc :type u16)    ; program counter
+  (sp #xfd   :type u8)     ; stack pointer
+  (sr #x24   :type u8)     ; status register
+  (xr 0      :type u8)     ; x register
+  (yr 0      :type u8)     ; y register
+  (ar 0      :type u8)     ; accumulator
+  (cc 0      :type fixnum)) ; cycle counter
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::8][cpu.lisp:8-16]]
+
+* What DEFSTRUCT Generates
+
+For the ~cpu~ structure above, Common Lisp automatically creates:
+
+** Constructor Function
+
+#+BEGIN_SRC lisp
+;; Generated: make-cpu
+(make-cpu)                    ; Uses all defaults
+(make-cpu :pc #x0000 :ar 42)  ; Override specific slots
+#+END_SRC
+
+** Accessor Functions
+
+#+BEGIN_SRC lisp
+;; Generated: cpu-pc, cpu-sp, cpu-sr, cpu-xr, cpu-yr, cpu-ar, cpu-cc
+(cpu-pc my-cpu)               ; Get program counter
+(setf (cpu-pc my-cpu) #x0200) ; Set program counter
+#+END_SRC
+
+** Type Predicate
+
+#+BEGIN_SRC lisp
+;; Generated: cpu-p
+(cpu-p my-cpu)  ; => T if my-cpu is a cpu structure
+(cpu-p 42)      ; => NIL
+#+END_SRC
+
+** Copier Function
+
+#+BEGIN_SRC lisp
+;; Generated: copy-cpu
+(copy-cpu my-cpu)  ; Creates a shallow copy
+#+END_SRC
+
+* Slot Options
+
+** Default Values
+
+Each slot can have a default value (the first element after the slot name):
+
+#+BEGIN_SRC lisp
+(pc #xfffc :type u16)  ; Default value is #xfffc (65532 in decimal)
+#+END_SRC
+
+** Type Declarations
+
+The ~:type~ option specifies the expected type for the slot:
+
+#+BEGIN_SRC lisp
+(sp #xfd :type u8)  ; Must be an unsigned 8-bit value
+#+END_SRC
+
+* Using Structures - Global Instance
+
+The cl-6502 creates a default global CPU instance:
+
+#+BEGIN_SRC lisp
+(defparameter *cpu* (make-cpu)
+  "The 6502 instance used by default during execution.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::31][cpu.lisp:31-32]]
+
+* Practical Usage Example
+
+Here's how the CPU structure is used in the emulator:
+
+#+BEGIN_SRC lisp
+(defun execute (cpu)
+  "Step the CPU until a BRK instruction."
+  (loop for opcode of-type u8 = (get-byte (cpu-pc cpu))
+     do (handler-case (step-cpu cpu opcode)
+          (undefined-function ()
+            (error 'illegal-opcode :opcode opcode)))
+     until (zerop opcode)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/utils.lisp::3][utils.lisp:3-9]]
+
+The function accesses ~cpu-pc~ to get the program counter, demonstrating
+how structure accessors integrate naturally into code.
+
+* Another Structure Example
+
+The assembler uses a structure to represent instructions:
+
+#+BEGIN_SRC lisp
+(defstruct instruction
+  "Represents a single line of code."
+  (label        nil :type (or null string))
+  (opcode       nil :type (or null symbol))
+  (address-mode nil :type (or null symbol list))
+  (value        nil :type (or null u16 list string)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::17][assemble.lisp:17-22]]
+
+Note the use of ~(or null ...)~ types to indicate optional values.
+
+* Using WITH-SLOTS for Cleaner Access
+
+When accessing multiple slots, use ~with-slots~ (works with both
+structures and CLOS objects):
+
+#+BEGIN_SRC lisp
+(defun assemble-instruction (instruction pc env)
+  "Given an instruction, and the current program counter, fill the environment
+   with any labels and assemble instruction to a list of bytes."
+  (with-slots (opcode value label) instruction
+    (when label
+      (setf (gethash label env) pc))
+    (when opcode
+      (let ((mode (decide-address-mode instruction env)))
+        (list* (find-opcode opcode mode) (process-args value mode pc))))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::73][assemble.lisp:73-81]]
+
+* Structure vs. CLOS Classes
+
+| Feature              | DEFSTRUCT      | DEFCLASS (CLOS)    |
+|----------------------+----------------+--------------------|
+| Speed                | Faster         | Slightly slower    |
+| Inheritance          | Single only    | Multiple           |
+| Method dispatch      | No             | Yes (full OOP)     |
+| Slot redefinition    | Not at runtime | Updateable         |
+| Memory efficiency    | Better         | More overhead      |
+
+Use ~defstruct~ for simple, performance-critical data structures.
+Use ~defclass~ when you need inheritance, methods, or runtime flexibility.
+
+* Exercise
+
+Create a structure ~point-3d~ representing a point in 3D space with:
+- Slots ~x~, ~y~, ~z~ defaulting to 0.0
+- Type declarations for ~single-float~
+- Write a function ~distance~ that calculates the distance between two points

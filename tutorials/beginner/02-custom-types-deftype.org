@@ -1,0 +1,134 @@
+#+TITLE: Custom Types with DEFTYPE
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Common Lisp's type system allows you to define custom types using ~deftype~.
+These type definitions are especially useful for documentation, type
+checking at runtime, and providing hints to the compiler for optimization.
+
+* Basic Type Definition
+
+The cl-6502 project defines types for 8-bit and 16-bit unsigned integers,
+which are fundamental to 6502 CPU emulation:
+
+#+BEGIN_SRC lisp
+(deftype u8 () '(unsigned-byte 8))
+(deftype u16 () '(unsigned-byte 16))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::5][cpu.lisp:5-6]]
+
+* Understanding the Syntax
+
+The ~deftype~ macro has the following structure:
+
+#+BEGIN_SRC lisp
+(deftype type-name (lambda-list)
+  type-specifier)
+#+END_SRC
+
+- *type-name*: The name of your new type
+- *lambda-list*: Parameters for parameterized types (empty ~()~ for simple types)
+- *type-specifier*: A quoted expression describing the type
+
+* Using Custom Types
+
+** In Structure Definitions
+
+Custom types shine when used in structure slot definitions:
+
+#+BEGIN_SRC lisp
+(defstruct cpu
+  "A 6502 CPU with an extra slot for tracking the cycle count/clock ticks."
+  (pc #xfffc :type u16)    ; program counter - 16-bit
+  (sp #xfd   :type u8)     ; stack pointer - 8-bit
+  (sr #x24   :type u8)     ; status register - 8-bit
+  (xr 0      :type u8)     ; x register
+  (yr 0      :type u8)     ; y register
+  (ar 0      :type u8)     ; accumulator
+  (cc 0      :type fixnum)) ; cycle counter
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::8][cpu.lisp:8-16]]
+
+** In Function Declarations
+
+Use ~declaim~ with ~ftype~ to declare function types:
+
+#+BEGIN_SRC lisp
+(declaim (ftype (function (fixnum) u8) wrap-byte))
+(defun wrap-byte (value)
+  "Wrap VALUE so it conforms to (typep value 'u8), i.e. a single byte."
+  (logand value #xff))
+
+(declaim (ftype (function (fixnum) u16) wrap-word))
+(defun wrap-word (value)
+  "Wrap VALUE so it conforms to (typep value 'u16), i.e. a machine word."
+  (logand value #xffff))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::54][cpu.lisp:54-63]]
+
+** In Array Type Specifications
+
+#+BEGIN_SRC lisp
+(declaim (type (simple-array u8 (#x10000)) *ram*))
+(defparameter *ram* (bytevector #x10000)
+  "A lovely hunk of bytes.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::27][cpu.lisp:27-29]]
+
+* Runtime Type Checking
+
+You can check types at runtime with ~typep~:
+
+#+BEGIN_SRC lisp
+(typep 255 'u8)    ; => T
+(typep 256 'u8)    ; => NIL
+(typep 65535 'u16) ; => T
+(typep 65536 'u16) ; => NIL
+#+END_SRC
+
+* Creating Specialized Arrays
+
+The cl-6502 project defines a helper to create byte arrays:
+
+#+BEGIN_SRC lisp
+(defun bytevector (size)
+  "Return an array of the given SIZE with element-type u8."
+  (make-array size :element-type 'u8))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::21][cpu.lisp:21-23]]
+
+This ensures that the array stores elements efficiently using only 8 bits
+per element rather than a full machine word.
+
+* Common Type Specifiers
+
+Common Lisp provides many built-in type specifiers:
+
+| Type Specifier          | Description                    |
+|-------------------------+--------------------------------|
+| ~(unsigned-byte n)~     | Non-negative integer, n bits   |
+| ~(signed-byte n)~       | Signed integer, n bits         |
+| ~fixnum~                | Efficient integer (impl-dependent) |
+| ~(integer low high)~    | Integer in range [low, high]   |
+| ~(simple-array type dims)~ | Simple array specification  |
+
+* Benefits of Type Declarations
+
+1. *Documentation*: Types document the expected values for parameters
+2. *Error Detection*: Runtime type errors can be caught earlier
+3. *Optimization*: Compilers can generate more efficient code with type info
+4. *Safety*: ~(declare (type ...))~ in functions enables runtime checks
+
+* Exercise
+
+1. Define a type ~percentage~ that represents integers from 0 to 100.
+2. Define a type ~rgb-component~ for color values (0-255).
+3. Write a function ~make-color~ that takes three ~rgb-component~ values
+   and returns a list, using type declarations.

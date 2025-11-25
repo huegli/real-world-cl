@@ -1,0 +1,206 @@
+#+TITLE: SETF Extensibility - Defining Setf Functions
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+One of Common Lisp's elegant features is the generalized ~setf~ macro.
+Any "place" that can be read can also potentially be written to using
+~setf~. This tutorial shows how to define your own setf-able places.
+
+* Basic SETF Usage
+
+Standard setf works with built-in accessors:
+
+#+BEGIN_SRC lisp
+(setf x 10)                    ; Variable
+(setf (car list) 'new)         ; List accessor
+(setf (aref array 0) value)    ; Array element
+(setf (gethash key table) val) ; Hash table entry
+#+END_SRC
+
+* Defining SETF Functions
+
+The cl-6502 project defines setf-able accessors for memory:
+
+** GET-BYTE and (SETF GET-BYTE)
+
+#+BEGIN_SRC lisp
+(defun get-byte (address)
+  "Get a byte from RAM at the given ADDRESS."
+  (aref *ram* address))
+
+(defun (setf get-byte) (new-val address)
+  "Set ADDRESS in *ram* to NEW-VAL."
+  (setf (aref *ram* address) new-val))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::71][cpu.lisp:71-77]]
+
+The syntax ~(defun (setf name) ...)~ defines what happens when you write
+~(setf (name ...) value)~.
+
+** GET-WORD and (SETF GET-WORD)
+
+#+BEGIN_SRC lisp
+(defun get-word (address &optional wrap-p)
+  "Get a word from RAM starting at the given ADDRESS."
+  (+ (get-byte address)
+     (ash (get-byte (if wrap-p (wrap-page address) (1+ address))) 8)))
+
+(defun (setf get-word) (new-val address)
+  "Set ADDRESS and (1+ ADDRESS) in *ram* to NEW-VAL, little endian ordering."
+  (setf (get-byte address) (wrap-byte (ash new-val -8))
+        (get-byte (1+ address)) (wrap-byte new-val)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::79][cpu.lisp:79-88]]
+
+** GET-RANGE and (SETF GET-RANGE)
+
+#+BEGIN_SRC lisp
+(defun get-range (start &optional end)
+  "Get a range of bytes from RAM, starting from START and stopping at END."
+  (subseq *ram* start end))
+
+(defun (setf get-range) (bytevector start)
+  "Replace the contents of RAM, starting from START with BYTEVECTOR."
+  (setf (subseq *ram* start (+ start (length bytevector))) bytevector))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::89][cpu.lisp:89-96]]
+
+* The SETF Function Signature
+
+The setf function always receives the new value as the *first* argument:
+
+#+BEGIN_SRC lisp
+;; Reader function
+(defun foo (x y z)
+  ...)
+
+;; Writer function: new-value comes FIRST
+(defun (setf foo) (new-value x y z)
+  ...)
+
+;; Usage
+(setf (foo a b c) new-val)
+;; Calls: ((setf foo) new-val a b c)
+#+END_SRC
+
+* Complex SETF Example: Addressing Modes
+
+The cl-6502 generates setf functions for each addressing mode:
+
+#+BEGIN_SRC lisp
+(defmacro defaddress (name (&key reader writer cpu-reg) &body body)
+  `(progn
+     ;; ... reader method ...
+     ;; ... writer method ...
+     (push ',name *address-modes*)
+     (defun ,name (cpu) ,@body)
+     (defun (setf ,name) (value cpu)
+       ,(if cpu-reg
+            `(setf ,@body value)
+            `(setf (get-byte ,@body) value)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/addressing.lisp::16][addressing.lisp:16-30]]
+
+This generates both a reader ~(name cpu)~ and a writer ~(setf name)~.
+
+* Usage Example: Zero Page Addressing
+
+#+BEGIN_SRC lisp
+(defaddress zero-page (:reader "^_$"
+                       :writer "~{$~2,'0x~}")
+  (get-byte (cpu-pc cpu)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/addressing.lisp::57][addressing.lisp:57-59]]
+
+This generates:
+
+#+BEGIN_SRC lisp
+;; Reader: returns the address
+(defun zero-page (cpu)
+  (get-byte (cpu-pc cpu)))
+
+;; Writer: stores value at that address
+(defun (setf zero-page) (value cpu)
+  (setf (get-byte (get-byte (cpu-pc cpu))) value))
+#+END_SRC
+
+* Alternative: DEFSETF
+
+For simpler cases, ~defsetf~ provides a shorthand:
+
+#+BEGIN_SRC lisp
+;; Short form - just specify the setter function
+(defsetf get-byte set-byte)
+
+;; Long form - with transformation
+(defsetf get-byte (address) (new-value)
+  `(setf (aref *ram* ,address) ,new-value))
+#+END_SRC
+
+However, ~(defun (setf ...) ...)~ is more flexible and commonly used.
+
+* Alternative: DEFINE-SETF-EXPANDER
+
+For the most complex cases where you need full control over the
+generated code:
+
+#+BEGIN_SRC lisp
+(define-setf-expander get-byte (address)
+  (let ((addr-temp (gensym "ADDR"))
+        (store-temp (gensym "STORE")))
+    (values
+     (list addr-temp)           ; Temporary variables
+     (list address)             ; Value forms
+     (list store-temp)          ; Store variables
+     `(setf (aref *ram* ,addr-temp) ,store-temp)  ; Store form
+     `(aref *ram* ,addr-temp)))) ; Access form
+#+END_SRC
+
+This is rarely needed but allows for optimizations like computing
+subexpressions only once.
+
+* Practical Pattern: Stack-Like Access
+
+The cl-6502 uses setf for stack operations:
+
+#+BEGIN_SRC lisp
+(defun stack-push (value cpu)
+  "Push the byte VALUE on the stack and decrement the SP."
+  (setf (get-byte (+ (cpu-sp cpu) #x100)) (wrap-byte value))
+  (setf (cpu-sp cpu) (wrap-byte (1- (cpu-sp cpu)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::99][cpu.lisp:99-102]]
+
+Here, ~setf~ is used with both ~get-byte~ and ~cpu-sp~ seamlessly.
+
+* Best Practices
+
+1. *Keep reader and writer consistent*: The setter should store exactly
+   what the getter retrieves.
+
+2. *Return the new value*: Setf functions conventionally return the
+   value that was stored.
+
+3. *First argument is new value*: Always put new-val first in the
+   parameter list.
+
+4. *Use defun (setf ...)* for most cases: It's clearer and more flexible
+   than defsetf.
+
+* Exercise
+
+1. Define a ~point~ structure with ~x~ and ~y~ slots
+
+2. Create functions ~point-magnitude~ and ~(setf point-magnitude)~ that
+   get/set the distance from origin (scaling x and y proportionally)
+
+3. Create a simple property-list wrapper with ~get-property~ and
+   ~(setf get-property)~

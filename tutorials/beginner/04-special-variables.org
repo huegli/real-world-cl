@@ -1,0 +1,168 @@
+#+TITLE: Special Variables with DEFPARAMETER and DEFVAR
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Common Lisp has a powerful concept of "special" (dynamically scoped)
+variables. These are declared using ~defparameter~ and ~defvar~, and by
+convention their names are surrounded by asterisks (earmuffs).
+
+* DEFPARAMETER vs DEFVAR
+
+Both declare special variables, but they differ in re-evaluation behavior:
+
+| Form         | Re-evaluation on load | Typical use                    |
+|--------------+-----------------------+--------------------------------|
+| ~defparameter~ | Always re-initialized | Configuration, defaults        |
+| ~defvar~       | Only if unbound       | State that should persist      |
+
+* Real-World Examples from cl-6502
+
+** Global CPU State
+
+#+BEGIN_SRC lisp
+(defparameter *cpu* (make-cpu)
+  "The 6502 instance used by default during execution.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::31][cpu.lisp:31-32]]
+
+This creates a default CPU instance. Using ~defparameter~ means reloading
+the file resets the CPU to a fresh state.
+
+** Memory Array
+
+#+BEGIN_SRC lisp
+(declaim (type (simple-array u8 (#x10000)) *ram*))
+(defparameter *ram* (bytevector #x10000)
+  "A lovely hunk of bytes.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::27][cpu.lisp:27-29]]
+
+The 64KB RAM array is declared with its type for compiler optimization.
+
+** Opcode Function Table
+
+#+BEGIN_SRC lisp
+(declaim (type (simple-vector 256) *opcode-funs*))
+(defparameter *opcode-funs* (make-array #x100 :element-type '(or function null))
+  "The opcode lambdas used during emulation.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::34][cpu.lisp:34-36]]
+
+** Metadata Storage
+
+#+BEGIN_SRC lisp
+(defparameter *opcode-meta* (make-array #x100 :initial-element nil)
+  "A mapping of opcodes to metadata lists.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::38][cpu.lisp:38-39]]
+
+** Configuration Lists
+
+#+BEGIN_SRC lisp
+(defparameter *address-modes* nil
+  "A list of all the 6502 Address Modes.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/addressing.lisp::5][addressing.lisp:5-6]]
+
+** Using DEFVAR for Caches
+
+#+BEGIN_SRC lisp
+(defvar *jit-cache* (make-hash-table)
+  "The JIT's hot code cache. Currently never invalidated.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/jit.lisp::3][jit.lisp:3-4]]
+
+Notice ~defvar~ is used here because the cache should persist across
+file reloads during development - you don't want to lose compiled code.
+
+* Dynamic Binding with LET
+
+Special variables can be temporarily rebound:
+
+#+BEGIN_SRC lisp
+;; Global default
+(defparameter *cpu* (make-cpu))
+
+;; Temporarily use a different CPU
+(let ((*cpu* (make-cpu :pc #x0200)))
+  ;; All code here sees the new *cpu*
+  (execute *cpu*))
+;; Back to original *cpu* here
+#+END_SRC
+
+This is dynamic scoping - the binding affects all called functions, not
+just the lexical scope.
+
+* Constants with DEFCONSTANT
+
+For values that never change, use ~defconstant~:
+
+#+BEGIN_SRC lisp
+(defconstant +relative-branch-size-byte+ 2)
+(defconstant +max-byte+ 256)
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::3][assemble.lisp:3-4]]
+
+Constants use the ~+plus+~ naming convention and cannot be rebound.
+
+** Non-constant "Constants"
+
+For values that are conceptually constant but might be lists or other
+mutable objects, use ~defparameter~ instead:
+
+#+BEGIN_SRC lisp
+(defparameter +absolute-modes+ '(absolute absolute-x absolute-y))
+(defparameter +zero-page-modes+ '(zero-page zero-page-x zero-page-y))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::5][assemble.lisp:5-6]]
+
+Note: These use the ~+plus+~ convention but are ~defparameter~ because
+in Common Lisp, ~defconstant~ with list values can cause issues when
+the file is recompiled.
+
+* Type Declarations with DECLAIM
+
+Pair special variables with type declarations for optimization:
+
+#+BEGIN_SRC lisp
+(declaim (type (simple-array u8 (#x10000)) *ram*))
+(defparameter *ram* (bytevector #x10000))
+#+END_SRC
+
+The ~declaim~ tells the compiler the exact type, enabling optimizations.
+
+* Naming Conventions
+
+| Convention     | Meaning                          |
+|----------------+----------------------------------|
+| ~*earmuffs*~   | Special (dynamic) variables      |
+| ~+plus-signs+~ | Constants                        |
+| No decoration  | Lexical variables, functions     |
+
+* Best Practices
+
+1. *Always use earmuffs* for special variables to signal dynamic scope
+2. *Use ~defparameter~* for configuration values and resettable state
+3. *Use ~defvar~* for state that should persist across reloads
+4. *Use ~defconstant~* only for truly immutable atomic values
+5. *Add type declarations* when performance matters
+6. *Document each variable* with a descriptive docstring
+
+* Exercise
+
+Create a simple configuration system with:
+1. A ~*debug-mode*~ parameter (boolean, default NIL)
+2. A ~*log-level*~ parameter (one of :error, :warn, :info, :debug)
+3. A ~+max-retries+~ constant set to 3
+4. A function that respects these settings and demonstrate rebinding
+   ~*debug-mode*~ temporarily with ~let~

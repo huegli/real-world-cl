@@ -1,0 +1,224 @@
+#+TITLE: Hash Tables and the Enumeration Pattern
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Hash tables are Common Lisp's primary associative data structure,
+offering O(1) average-case lookup. This tutorial covers hash table
+usage with a practical pattern from cl-6502: creating enumerations.
+
+* Creating Hash Tables
+
+The basic constructor is ~make-hash-table~:
+
+#+BEGIN_SRC lisp
+;; Default hash table (uses EQL for comparison)
+(make-hash-table)
+
+;; Hash table with specific test (for string keys)
+(make-hash-table :test 'equal)
+
+;; Pre-sized hash table
+(make-hash-table :size 256)
+#+END_SRC
+
+* Hash Table Tests
+
+| Test    | Use Case                              |
+|---------+---------------------------------------|
+| ~eq~    | Symbols, same object identity         |
+| ~eql~   | Numbers, characters, symbols (default) |
+| ~equal~ | Strings, lists (structural equality)  |
+| ~equalp~| Case-insensitive strings, numbers     |
+
+* Basic Operations
+
+#+BEGIN_SRC lisp
+(defvar *table* (make-hash-table))
+
+;; Setting values
+(setf (gethash 'key *table*) 'value)
+
+;; Getting values
+(gethash 'key *table*)           ; => VALUE, T
+(gethash 'missing *table*)       ; => NIL, NIL
+(gethash 'missing *table* :default) ; => :DEFAULT, NIL
+
+;; Checking existence
+(multiple-value-bind (value present-p) (gethash 'key *table*)
+  (when present-p
+    (format t "Found: ~A~%" value)))
+
+;; Removing entries
+(remhash 'key *table*)
+
+;; Counting entries
+(hash-table-count *table*)
+#+END_SRC
+
+* Real-World Pattern: The DEFENUM Macro
+
+The cl-6502 project uses a clever macro to create enumerations backed
+by hash tables:
+
+#+BEGIN_SRC lisp
+(defmacro defenum (name (&rest keys))
+  "Define a function named %NAME, that takes KEY as an arg and returns the
+index of KEY. KEYS should be scalar values."
+  (let ((enum (make-hash-table)))
+    (loop for i = 0 then (1+ i)
+       for key in keys
+       do (setf (gethash key enum) i))
+    `(defun ,(intern (format nil "%~:@(~A~)" name)) (key)
+       (let ((enum ,enum))
+         (gethash key enum)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::118][cpu.lisp:118-127]]
+
+* How DEFENUM Works
+
+1. Creates a hash table at macro-expansion time
+2. Populates it with keys and their indices
+3. Generates a function that looks up keys in that table
+
+Usage:
+
+#+BEGIN_SRC lisp
+(defenum status-bit (:carry :zero :interrupt :decimal
+                     :break :unused :overflow :negative))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::130][cpu.lisp:130-131]]
+
+This creates a function ~%STATUS-BIT~:
+
+#+BEGIN_SRC lisp
+(%status-bit :carry)    ; => 0
+(%status-bit :zero)     ; => 1
+(%status-bit :negative) ; => 7
+#+END_SRC
+
+* Using EVAL-WHEN for Compile-Time Definitions
+
+#+BEGIN_SRC lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defenum status-bit (:carry :zero :interrupt :decimal
+                       :break :unused :overflow :negative)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::129][cpu.lisp:129-131]]
+
+The ~eval-when~ ensures the enum is available during compilation,
+allowing other macros to use ~%status-bit~ at compile time.
+
+* Hash Tables in the Assembler
+
+The assembler uses hash tables for label resolution:
+
+#+BEGIN_SRC lisp
+(defun assemble-code-block (code-block &optional init-env org-start)
+  "Given a list of instructions, assemble each to a byte vector."
+  (let ((env (or init-env (make-hash-table :test 'equal)))
+        ;; ...
+        )
+    ;; Build byte vector, without labels
+    (loop for instruction in code-block
+       do (let ((bytes (assemble-instruction instruction
+                         (+ pc-start (length output)) env)))
+            ;; ...
+            ))
+    ;; Resolve labels in the byte vector
+    (loop for i from 0 below (length output)
+       do (resolve-byte (aref output i) env))
+    output))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::57][assemble.lisp:57-71]]
+
+Labels (strings) map to addresses (integers), requiring ~:test 'equal~.
+
+* JIT Cache with Hash Tables
+
+The JIT compiler caches compiled code using program counter as key:
+
+#+BEGIN_SRC lisp
+(defvar *jit-cache* (make-hash-table)
+  "The JIT's hot code cache. Currently never invalidated.")
+
+(defun jit-step (cpu pc)
+  "If the current block has been JIT compiled, run it, otherwise compile it."
+  (alexandria:if-let (fn (gethash pc *jit-cache*))
+    (funcall fn cpu)
+    (let ((code (jit-block (get-basic-block cpu))))
+      (setf (gethash pc *jit-cache*) code)
+      (funcall code cpu))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/jit.lisp::3][jit.lisp:3-4, 19-25]]
+
+* Iterating Over Hash Tables
+
+** Using MAPHASH
+
+#+BEGIN_SRC lisp
+(maphash (lambda (key value)
+           (format t "~A => ~A~%" key value))
+         *table*)
+#+END_SRC
+
+** Using LOOP
+
+#+BEGIN_SRC lisp
+(loop for key being the hash-keys of *table*
+      for value being the hash-values of *table*
+      do (format t "~A => ~A~%" key value))
+
+;; Or using WITH-HASH-TABLE-ITERATOR
+(with-hash-table-iterator (next *table*)
+  (loop (multiple-value-bind (more key value) (next)
+          (unless more (return))
+          (format t "~A => ~A~%" key value))))
+#+END_SRC
+
+* Pattern: Memoization with Hash Tables
+
+#+BEGIN_SRC lisp
+(let ((cache (make-hash-table)))
+  (defun fibonacci (n)
+    (or (gethash n cache)
+        (setf (gethash n cache)
+              (if (<= n 1)
+                  n
+                  (+ (fibonacci (- n 1))
+                     (fibonacci (- n 2))))))))
+#+END_SRC
+
+* Pattern: Default Value with GETHASH
+
+#+BEGIN_SRC lisp
+;; Method 1: Third argument to gethash
+(gethash key table default-value)
+
+;; Method 2: Multiple values
+(multiple-value-bind (value present-p) (gethash key table)
+  (if present-p value (compute-default)))
+
+;; Method 3: Using alexandria:ensure-gethash
+(alexandria:ensure-gethash key table (make-default))
+#+END_SRC
+
+* Best Practices
+
+1. *Choose the right test*: Use ~equal~ for strings, ~eql~ for numbers/symbols
+2. *Pre-size when possible*: If you know the approximate size, use ~:size~
+3. *Check for presence*: Use the second return value of ~gethash~
+4. *Clear tables*: Use ~clrhash~ to empty a table without creating a new one
+5. *Consider weak tables*: Use ~:weakness~ for caches that shouldn't prevent GC
+
+* Exercise
+
+1. Create a simple memoization macro using hash tables
+2. Implement a bidirectional map (two hash tables, lookup by key or value)
+3. Create a "counting bag" data structure that tracks item frequencies

@@ -1,0 +1,240 @@
+#+TITLE: Runtime Code Compilation (JIT)
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Common Lisp has a unique capability: the compiler is available at
+runtime. You can generate, compile, and execute code dynamically.
+The cl-6502 project demonstrates this with a simple JIT compiler
+for basic blocks of 6502 code.
+
+* The COMPILE Function
+
+The built-in ~compile~ function compiles a lambda expression:
+
+#+BEGIN_SRC lisp
+;; Compile a lambda and get a function object
+(compile nil '(lambda (x) (* x x)))
+;; => #<FUNCTION (LAMBDA (X)) {100ABC123}>
+
+;; Use it
+(funcall (compile nil '(lambda (x) (* x x))) 5)
+;; => 25
+#+END_SRC
+
+* The JIT Cache
+
+cl-6502 maintains a cache of compiled code blocks:
+
+#+BEGIN_SRC lisp
+(defvar *jit-cache* (make-hash-table)
+  "The JIT's hot code cache. Currently never invalidated.")
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/jit.lisp::3][jit.lisp:3-4]]
+
+Keys are program counter values; values are compiled functions.
+
+* Basic Block Detection
+
+A "basic block" is a sequence of instructions with no branches:
+
+#+BEGIN_SRC lisp
+(defun get-basic-block (cpu)
+  "Get the opcodes from the current PC to the next branch."
+  (flet ((op-length (x) (fourth (aref *opcode-meta* x))))
+    (loop for pc = (cpu-pc cpu) then (+ pc (op-length op))
+       for op = (get-byte pc) collect op
+       until (member op '(#x90 #xb0 #xf0 #x30 #xd0 #x10 #x50 #x70
+                          #x00 #x4c #x6c #x20 #x40 #x60)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/jit.lisp::6][jit.lisp:6-12]]
+
+The function:
+1. Starts at the current program counter
+2. Collects opcodes until a branch/jump/return
+3. Returns the list of opcodes in the block
+
+* Compiling a Basic Block
+
+#+BEGIN_SRC lisp
+(defun jit-block (opcodes)
+  "Given a list of opcodes, JIT compile an equivalent function."
+  (flet ((jit-op (x) `(funcall ,(aref *opcode-funs* x) cpu)))
+    (compile nil `(lambda (cpu) ,@(mapcar #'jit-op opcodes)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/jit.lisp::14][jit.lisp:14-17]]
+
+This function:
+1. Takes a list of opcodes
+2. For each opcode, generates ~(funcall <handler> cpu)~
+3. Wraps everything in a lambda
+4. Compiles the lambda to native code
+
+** Generated Code Example
+
+For opcodes ~(#xa9 #x8d)~ (LDA immediate, STA absolute):
+
+#+BEGIN_SRC lisp
+(compile nil
+  `(lambda (cpu)
+     (funcall ,(aref *opcode-funs* #xa9) cpu)  ; LDA
+     (funcall ,(aref *opcode-funs* #x8d) cpu))) ; STA
+#+END_SRC
+
+The opcodes become direct function calls in compiled code.
+
+* The JIT Step Function
+
+#+BEGIN_SRC lisp
+(defun jit-step (cpu pc)
+  "If the current block has been JIT compiled, run it, otherwise compile it."
+  (alexandria:if-let (fn (gethash pc *jit-cache*))
+    (funcall fn cpu)
+    (let ((code (jit-block (get-basic-block cpu))))
+      (setf (gethash pc *jit-cache*) code)
+      (funcall code cpu))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/jit.lisp::19][jit.lisp:19-25]]
+
+The pattern:
+1. Check if code at PC is already compiled (cache lookup)
+2. If yes, run the cached function
+3. If no, compile the block, cache it, then run it
+
+* Performance Implications
+
+** Without JIT (Interpreter)
+
+Each instruction requires:
+1. Lookup opcode in array
+2. Call handler function
+3. Handler does its work
+4. Return and repeat
+
+** With JIT (Compiled)
+
+The basic block becomes a single compiled function:
+1. One function call per block (not per instruction)
+2. The compiler can inline and optimize
+3. No per-instruction dispatch overhead
+
+* Advanced: Code Generation Patterns
+
+** Generating Conditional Code
+
+#+BEGIN_SRC lisp
+(defun make-conditional-adder (threshold)
+  "Generate a function that adds only if x > threshold."
+  (compile nil
+    `(lambda (x y)
+       (if (> x ,threshold)
+           (+ x y)
+           y))))
+
+(funcall (make-conditional-adder 10) 15 5)  ; => 20
+(funcall (make-conditional-adder 10) 5 5)   ; => 5
+#+END_SRC
+
+** Generating Dispatch Tables
+
+#+BEGIN_SRC lisp
+(defun make-dispatcher (handlers)
+  "Create a function that dispatches based on type tag."
+  (compile nil
+    `(lambda (tag value)
+       (case tag
+         ,@(loop for (key . fn) in handlers
+                 collect `(,key (funcall ,fn value)))
+         (otherwise (error "Unknown tag: ~A" tag))))))
+#+END_SRC
+
+* The Power of Runtime Compilation
+
+** Specialization
+
+Generate code specialized for specific data:
+
+#+BEGIN_SRC lisp
+(defun make-vector-dot-product (size)
+  "Generate an unrolled dot product for vectors of SIZE."
+  (compile nil
+    `(lambda (a b)
+       (+ ,@(loop for i from 0 below size
+                  collect `(* (aref a ,i) (aref b ,i)))))))
+
+;; For size 3, generates:
+;; (lambda (a b) (+ (* (aref a 0) (aref b 0))
+;;                  (* (aref a 1) (aref b 1))
+;;                  (* (aref a 2) (aref b 2))))
+#+END_SRC
+
+** Partial Evaluation
+
+#+BEGIN_SRC lisp
+(defun make-polynomial-evaluator (coefficients)
+  "Generate optimized code for a specific polynomial."
+  (compile nil
+    `(lambda (x)
+       (+ ,@(loop for c in coefficients
+                  for i from 0
+                  collect (if (zerop i)
+                              c
+                              `(* ,c ,@(loop repeat i collect 'x))))))))
+#+END_SRC
+
+* Caveats and Best Practices
+
+** 1. Compilation Has Overhead
+
+Don't compile hot paths on every call:
+
+#+BEGIN_SRC lisp
+;; Bad: Compiles every time
+(defun slow-operation (x)
+  (funcall (compile nil `(lambda () (* ,x ,x)))))
+
+;; Good: Cache the compiled function
+(let ((cache (make-hash-table)))
+  (defun fast-operation (x)
+    (funcall (or (gethash x cache)
+                 (setf (gethash x cache)
+                       (compile nil `(lambda () (* ,x ,x))))))))
+#+END_SRC
+
+** 2. Watch Memory Usage
+
+Compiled functions consume memory. The cl-6502 JIT cache is never
+invalidated, which is fine for a small emulator but might not be for
+larger applications.
+
+** 3. Security Considerations
+
+Never compile user-supplied code without sandboxing.
+
+** 4. Debugging Is Harder
+
+Generated code doesn't have meaningful source locations.
+
+* When to Use Runtime Compilation
+
+- Interpreters/emulators (like cl-6502)
+- Domain-specific language implementations
+- Performance-critical inner loops
+- Template instantiation
+- Specializing generic algorithms for specific types
+
+* Exercise
+
+1. Implement a simple expression compiler that takes arithmetic
+   expressions like ~'(+ (* x 2) y)~ and generates compiled functions
+
+2. Create a memoizing JIT that only compiles functions called more
+   than N times
+
+3. Build a "query compiler" that takes a filter specification and
+   generates an optimized predicate function

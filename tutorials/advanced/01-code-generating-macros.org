@@ -1,0 +1,218 @@
+#+TITLE: Code-Generating Macros
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+Macros that generate multiple definitions from a single declaration are
+one of Lisp's most powerful metaprogramming techniques. This tutorial
+examines sophisticated macro patterns from cl-6502, particularly the
+~defasm~ macro that generates CPU instruction implementations.
+
+* The DEFASM Macro
+
+This macro is the heart of the 6502 emulator, generating both metadata
+and executable code for each CPU instruction:
+
+#+BEGIN_SRC lisp
+(defmacro defasm (name (&key (docs "") raw-p (track-pc t))
+                  modes &body body)
+  "Define a 6502 instruction NAME, storing its DOCS and metadata in *opcode-meta*,
+and a lambda that executes BODY in *opcode-funs*."
+  `(progn
+     ,@(loop for (op cycles bytes mode) in modes collect
+            `(setf (aref *opcode-meta* ,op) ',(list name docs cycles bytes mode)))
+     ,@(loop for (op cycles bytes mode) in modes collect
+            `(setf (aref *opcode-funs* ,op)
+                   (named-lambda ,(intern (format nil "~A-~X" name op)) (cpu)
+                     (incf (cpu-pc cpu))
+                     (flet ((getter ()
+                              ,(make-getter name mode raw-p))
+                            (setter (x)
+                              (setf (,mode cpu) x)))
+                       ,@body)
+                     ,@(when track-pc
+                         `((incf (cpu-pc cpu) ,(1- bytes))))
+                     (incf (cpu-cc cpu) ,cycles))))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::183][cpu.lisp:183-206]]
+
+* Anatomy of DEFASM
+
+** Input Parameters
+
+- ~name~: Instruction mnemonic (e.g., ~adc~, ~lda~)
+- ~docs~: Documentation string
+- ~raw-p~: Whether getter returns address or value
+- ~track-pc~: Whether to auto-increment program counter
+- ~modes~: List of (opcode cycles bytes addressing-mode) tuples
+- ~body~: The instruction implementation
+
+** Generated Output
+
+For each addressing mode, the macro generates:
+
+1. *Metadata entry*: Stored in ~*opcode-meta*~ array
+2. *Lambda function*: Stored in ~*opcode-funs*~ array
+
+* Usage Example
+
+#+BEGIN_SRC lisp
+(defasm adc (:docs "Add to Accumulator with Carry")
+    ((#x61 6 2 indirect-x)
+     (#x65 3 2 zero-page)
+     (#x69 2 2 immediate)
+     (#x6d 4 3 absolute)
+     (#x71 5 2 indirect-y)
+     (#x75 4 2 zero-page-x)
+     (#x79 4 3 absolute-y)
+     (#x7d 4 3 absolute-x))
+  (let ((result (+ (cpu-ar cpu) (getter) (status-bit :carry))))
+    (set-flags-if :carry (> result #xff)
+                  :overflow (overflow-p result (cpu-ar cpu) (getter))
+                  :negative (logbitp 7 result)
+                  :zero (zerop (wrap-byte result)))
+    (setf (cpu-ar cpu) (wrap-byte result))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/opcodes.lisp::3][opcodes.lisp:3-17]]
+
+This single definition generates *8 functions* (one per addressing mode)
+and *8 metadata entries*.
+
+* Key Techniques
+
+** Loop-Generated Forms with ,@
+
+#+BEGIN_SRC lisp
+`(progn
+   ,@(loop for (op cycles bytes mode) in modes collect
+          `(setf (aref *opcode-meta* ,op) ...)))
+#+END_SRC
+
+The ~,@~ (comma-at) splices the list returned by ~loop~ into the ~progn~.
+
+** Computed Symbol Names
+
+#+BEGIN_SRC lisp
+(named-lambda ,(intern (format nil "~A-~X" name op)) (cpu) ...)
+#+END_SRC
+
+Creates unique function names like ~ADC-69~, ~ADC-6D~, etc.
+
+** Local Function Injection with FLET
+
+#+BEGIN_SRC lisp
+(flet ((getter ()
+         ,(make-getter name mode raw-p))
+       (setter (x)
+         (setf (,mode cpu) x)))
+  ,@body)
+#+END_SRC
+
+The ~getter~ and ~setter~ functions are injected into the body's scope,
+with their implementations varying by addressing mode.
+
+** Helper Function for Code Generation
+
+#+BEGIN_SRC lisp
+(defun make-getter (name mode raw-p)
+  "Generate an appropriate GETTER for NAME based on RAW-P
+and whether or not it is a register shift operation."
+  (let ((register-shift-op-p (and (member name '(asl lsr rol ror))
+                                  (eql mode 'accumulator))))
+    (if (or raw-p register-shift-op-p)
+        `(,mode cpu)
+        `(get-byte (,mode cpu)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/addressing.lisp::32][addressing.lisp:32-39]]
+
+Helper functions make complex macros more manageable.
+
+* The DEFADDRESS Macro
+
+Another code-generating macro creates addressing mode functions:
+
+#+BEGIN_SRC lisp
+(defmacro defaddress (name (&key reader writer cpu-reg) &body body)
+  `(progn
+     (defmethod reader ((mode (eql ',name)))
+       ,(cl-ppcre:regex-replace-all "_" reader "([^,()#&]+)"))
+     (defmethod writer ((mode (eql ',name))) ,writer)
+     (push ',name *address-modes*)
+     (defun ,name (cpu) ,@body)
+     (defun (setf ,name) (value cpu)
+       ,(if cpu-reg
+            `(setf ,@body value)
+            `(setf (get-byte ,@body) value)))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/addressing.lisp::16][addressing.lisp:16-30]]
+
+This generates:
+1. A ~reader~ method returning a regex
+2. A ~writer~ method returning a format string
+3. Registration in ~*address-modes*~
+4. A getter function
+5. A setf function
+
+* Usage Pattern
+
+#+BEGIN_SRC lisp
+(defaddress zero-page (:reader "^_$"
+                       :writer "~{$~2,'0x~}")
+  (get-byte (cpu-pc cpu)))
+
+(defaddress absolute-x (:reader "^_,\\s*[xX]$"
+                        :writer "$~{~2,'0x~}, X")
+  (let ((result (wrap-word (+ (get-word (cpu-pc cpu)) (cpu-xr cpu)))))
+    (maybe-update-cycle-count cpu result)
+    result))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/addressing.lisp::57][addressing.lisp:57-77]]
+
+* Best Practices for Code-Generating Macros
+
+1. *Factor out helpers*: Use functions like ~make-getter~ for complex logic
+2. *Use meaningful generated names*: Helps with debugging
+3. *Generate minimal code*: Only generate what varies per instance
+4. *Test macro expansion*: Use ~macroexpand-1~ during development
+5. *Document the generated API*: Users need to know what's created
+
+* Debugging Macro Expansion
+
+#+BEGIN_SRC lisp
+;; See what code is generated
+(macroexpand-1 '(defasm nop (:docs "No Operation")
+                    ((#xea 2 1 implied))
+                  nil))
+#+END_SRC
+
+* The Power of This Pattern
+
+From ~opcodes.lisp~, approximately 56 instruction definitions generate
+151 individual opcode handlers. The code remains:
+
+- *Readable*: Each instruction's logic is clear
+- *Maintainable*: Change the macro, change all instructions
+- *Correct*: Common patterns can't have inconsistent implementations
+
+* Exercise
+
+1. Create a macro ~defcommand~ that generates:
+   - A help string entry
+   - A handler function
+   - Registration in a command table
+
+2. Design a macro for defining REST API endpoints that generates:
+   - Route registration
+   - Parameter validation
+   - Handler function with destructured params
+
+3. Implement a ~defsql-table~ macro that generates:
+   - A struct for rows
+   - Insert/select/update/delete functions
+   - Field accessors

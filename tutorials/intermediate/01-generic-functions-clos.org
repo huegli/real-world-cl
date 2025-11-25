@@ -1,0 +1,196 @@
+#+TITLE: Generic Functions and Methods (CLOS Basics)
+#+AUTHOR: Generated from cl-6502
+#+STARTUP: showall
+
+* Introduction
+
+The Common Lisp Object System (CLOS) provides generic functions and
+methods for polymorphic behavior. Unlike traditional OOP where methods
+belong to classes, CLOS methods are specialized variants of generic
+functions that dispatch based on argument types.
+
+* Defining Generic Functions
+
+A generic function declares an interface; methods provide implementations:
+
+#+BEGIN_SRC lisp
+(defgeneric reader (mode)
+  (:documentation "Return a Perl-compatible regex suitable for parsing MODE.")
+  (:method (mode) (error 'invalid-mode :mode mode)))
+
+(defgeneric writer (mode)
+  (:documentation "Return a format string suitable for printing MODE.")
+  (:method (mode) (error 'invalid-mode :mode mode)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/addressing.lisp::8][addressing.lisp:8-14]]
+
+Key elements:
+- ~defgeneric~ declares the function's name and parameters
+- ~:documentation~ provides a docstring
+- ~:method~ can provide a default method inline
+
+* Method Specialization with EQL
+
+Methods can specialize on specific values using ~eql~ specializers:
+
+#+BEGIN_SRC lisp
+(defmethod reader ((mode (eql 'implied)))
+  "^$")
+
+(defmethod reader ((mode (eql 'accumulator)))
+  "^[aA]$")
+
+(defmethod reader ((mode (eql 'immediate)))
+  "^#_$")
+#+END_SRC
+
+Each method handles a specific addressing mode symbol. When you call
+~(reader 'immediate)~, CLOS dispatches to the matching method.
+
+* Generic Functions with Default Methods
+
+The cl-6502 defines generic functions with useful defaults:
+
+#+BEGIN_SRC lisp
+(defgeneric reset (obj)
+  (:documentation "Reset the OBJ to an initial state.")
+  (:method (obj) (initialize-instance obj)))
+
+(defgeneric nmi (obj)
+  (:documentation "Generate a non-maskable interrupt. Used for vblanking in NES.")
+  (:method (obj)
+    (stack-push-word (cpu-pc obj) obj)
+    (stack-push (cpu-sr obj) obj)
+    (setf (cpu-pc obj) (get-word #xfffa))))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::43][cpu.lisp:43-52]]
+
+The default methods work with any object that has the required slots.
+
+* Method Qualifiers: :AFTER, :BEFORE, :AROUND
+
+CLOS supports auxiliary methods that wrap the primary method:
+
+#+BEGIN_SRC lisp
+(defmethod initialize-instance :after ((cpu cpu) &key)
+  (setf (cpu-pc cpu) (absolute cpu)))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/cpu.lisp::18][cpu.lisp:18-19]]
+
+The ~:after~ qualifier means this method runs after the primary
+~initialize-instance~ method. The sequence is:
+
+1. ~:before~ methods (most specific first)
+2. Primary method
+3. ~:after~ methods (most specific last)
+
+~:around~ methods wrap everything and can use ~call-next-method~.
+
+* Using Generic Functions for Multiple Dispatch
+
+The ~asm~ function demonstrates method dispatch on argument type:
+
+#+BEGIN_SRC lisp
+(defgeneric asm (source &optional init-env org-start)
+  (:documentation "Assemble SOURCE into a bytevector and return it."))
+
+(defmethod asm ((source list) &optional init-env org-start)
+  (assemble-code-block (list-to-instructions source) init-env org-start))
+
+(defmethod asm ((source string) &optional init-env org-start)
+  (assemble-code-block (parse-code source) init-env org-start))
+#+END_SRC
+
+Source: [[file:../../programms/cl-6502/src/assemble.lisp::8][assemble.lisp:8-15]]
+
+The same function ~asm~ works differently depending on whether you pass
+a list (S-expression assembly) or a string (text assembly).
+
+* When to Use Generic Functions
+
+** Use Generic Functions When:
+- You need polymorphic behavior
+- Different types require different implementations
+- You want extensibility (users can add methods)
+- You need before/after/around processing
+
+** Use Regular Functions When:
+- Behavior is the same for all inputs
+- Performance is critical (direct calls are faster)
+- You don't need extensibility
+
+* DEFMETHOD Without DEFGENERIC
+
+You can define methods without an explicit ~defgeneric~; Common Lisp
+will create one automatically. However, explicit ~defgeneric~ is better
+for documentation and declaring the interface.
+
+* EQL Specializers: A Powerful Pattern
+
+The addressing mode pattern from cl-6502 is extremely useful:
+
+#+BEGIN_SRC lisp
+;; Define handlers for specific symbols
+(defmethod handle-command ((cmd (eql :quit)))
+  (quit-application))
+
+(defmethod handle-command ((cmd (eql :save)))
+  (save-document))
+
+(defmethod handle-command ((cmd (eql :load)))
+  (load-document))
+
+;; Default handler
+(defmethod handle-command (cmd)
+  (format t "Unknown command: ~A~%" cmd))
+#+END_SRC
+
+This is effectively a type-safe, extensible alternative to CASE statements.
+
+* Method Combination
+
+The standard method combination is:
+
+#+BEGIN_SRC
+:around methods (outermost to innermost, calling call-next-method)
+  :before methods (most-specific-first)
+    primary method
+  :after methods (most-specific-last)
+#+END_SRC
+
+Example flow:
+#+BEGIN_SRC lisp
+(defmethod foo :around ((x number))
+  (format t "Around: start~%")
+  (call-next-method)  ; Call the next method
+  (format t "Around: end~%"))
+
+(defmethod foo :before ((x number))
+  (format t "Before~%"))
+
+(defmethod foo ((x number))
+  (format t "Primary~%"))
+
+(defmethod foo :after ((x number))
+  (format t "After~%"))
+
+;; (foo 42) prints:
+;; Around: start
+;; Before
+;; Primary
+;; After
+;; Around: end
+#+END_SRC
+
+* Exercise
+
+1. Create a generic function ~describe-value~ that describes values
+   differently based on their type (number, string, list, symbol).
+
+2. Create an extensible command system using EQL specializers
+   where each command is a keyword.
+
+3. Use an ~:after~ method to log whenever a particular function is called.
