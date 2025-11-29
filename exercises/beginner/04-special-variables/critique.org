@@ -1,0 +1,136 @@
+#+TITLE: Critique for Special Variables Exercise
+#+AUTHOR: LLM Critique
+#+STARTUP: showall
+
+* Overall Assessment
+
+Good foundational attempt! You've correctly understood the basics of special
+variables and dynamic binding with ~let~. There are a few areas for improvement.
+
+* What Works Well
+
+1. ~*debug-mode*~ is correctly defined with ~defparameter~ and default ~nil~
+2. ~*log-level*~ correctly uses ~defparameter~ with a keyword symbol default
+3. The ~test-special~ function properly demonstrates dynamic rebinding of
+   ~*debug-mode*~ using ~let~
+4. Naming conventions with earmuffs are followed for the special variables
+
+* Areas for Improvement
+
+** Use DEFCONSTANT for Constants
+
+The ~+max-retries+~ uses the ~+plus+~ naming convention which indicates a
+constant, but you've defined it with ~defparameter~. For a simple numeric
+constant, you should use ~defconstant~:
+
+#+BEGIN_SRC lisp
+(defconstant +max-retries+ 3
+  "Maximum number of retry attempts.")
+#+END_SRC
+
+** Add Type Declaration for *log-level*
+
+You can define a custom type and declare it for ~*log-level*~:
+
+#+BEGIN_SRC lisp
+(deftype log-level ()
+  "Valid log levels for the application."
+  '(member :error :warn :info :debug))
+
+(declaim (type log-level *log-level*))
+(defparameter *log-level* :error
+  "Current logging level.")
+#+END_SRC
+
+** Add Docstrings
+
+All special variables should have descriptive docstrings:
+
+#+BEGIN_SRC lisp
+(defparameter *debug-mode* nil
+  "When non-nil, enables verbose debug output.")
+#+END_SRC
+
+** Demonstrate Using the Variables
+
+The function could actually use the variables in a more meaningful way:
+
+#+BEGIN_SRC lisp
+(defun log-message (level message)
+  "Log MESSAGE if LEVEL is at or above *log-level*."
+  (let ((levels '(:error :warn :info :debug)))
+    (when (<= (position level levels)
+              (position *log-level* levels))
+      (when *debug-mode*
+        (format t "[DEBUG] "))
+      (format t "~a: ~a~%" level message))))
+#+END_SRC
+
+* Answers to Questions
+
+** Question 1: How do I define the proper type for *log-level*?
+
+Use ~deftype~ to create a custom type using the ~member~ type specifier, then
+use ~declaim~ to declare the variable's type:
+
+#+BEGIN_SRC lisp
+(deftype log-level ()
+  '(member :error :warn :info :debug))
+
+(declaim (type log-level *log-level*))
+(defparameter *log-level* :error)
+#+END_SRC
+
+The ~member~ type specifier restricts values to one of the listed items.
+
+** Question 2: Do I use defparameter or defvar?
+
+Neither! For ~+max-retries+~, use ~defconstant~:
+
+#+BEGIN_SRC lisp
+(defconstant +max-retries+ 3)
+#+END_SRC
+
+The choice depends on intent:
+- ~defconstant~ - for values that truly never change (use ~+plus+~ naming)
+- ~defparameter~ - for configuration that gets reset on file reload
+- ~defvar~ - for state that should persist across file reloads
+
+Since ~+max-retries+~ uses the constant naming convention and 3 is an immutable
+atomic value, ~defconstant~ is the correct choice.
+
+* Suggested Improved Solution
+
+#+BEGIN_SRC lisp
+;;; Configuration types
+(deftype log-level ()
+  "Valid log levels for the application."
+  '(member :error :warn :info :debug))
+
+;;; Special variables
+(defparameter *debug-mode* nil
+  "When non-nil, enables verbose debug output.")
+
+(declaim (type log-level *log-level*))
+(defparameter *log-level* :error
+  "Current logging level. One of :error, :warn, :info, :debug.")
+
+;;; Constants
+(defconstant +max-retries+ 3
+  "Maximum number of retry attempts.")
+
+;;; Demonstration function
+(defun test-special ()
+  "Demonstrate special variable binding and access."
+  (format t "Default *debug-mode*: ~a~%" *debug-mode*)
+  (let ((*debug-mode* t))
+    (format t "Inside LET, *debug-mode*: ~a~%" *debug-mode*)
+    (format t "*log-level*: ~a~%" *log-level*)
+    (format t "+max-retries+: ~a~%" +max-retries+))
+  (format t "After LET, *debug-mode*: ~a~%" *debug-mode*))
+#+END_SRC
+
+* Score: 7/10
+
+Good understanding of the basics. Main issues are using ~defparameter~ instead
+of ~defconstant~ for the constant, and missing type declarations and docstrings.
